@@ -1,6 +1,6 @@
 # AWS Secret Manager Tool
 
-A command-line tool to manage AWS Secrets and inject them as environment variables when running applications.
+A command-line tool to manage AWS Secrets and inject them as environment variables when running applications. Supports both AWS Secrets Manager and Parameter Store.
 
 ## Setup
 
@@ -15,6 +15,14 @@ aws configure
 ```
 
 ## Usage
+
+### Choose a provider
+
+By default, the tool uses AWS Secrets Manager. You can specify Parameter Store for a more cost-effective option:
+
+```bash
+python main.py --provider parameterstore [command]
+```
 
 ### List available secrets
 
@@ -38,6 +46,11 @@ python main.py create new-secret-name username=admin password=secret123
 With a JSON file:
 ```bash
 python main.py create --file secret.json new-secret-name
+```
+
+With description:
+```bash
+python main.py create --description "My important credentials" new-secret-name username=admin password=secret123
 ```
 
 ### Update an existing secret
@@ -79,6 +92,11 @@ python main.py run --secret database-credentials --prefix DB_ -- python my_app.p
 Create a secret for database access:
 ```bash
 python main.py create db-credentials --description "Database access credentials" host=localhost port=5432 username=dbuser password=dbpass
+```
+
+Use Parameter Store instead of Secrets Manager:
+```bash
+python main.py --provider parameterstore create app-config api_key=abc123 timeout=30
 ```
 
 ## Environment Variables
