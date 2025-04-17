@@ -1,4 +1,4 @@
-#!/home/sumar/.local/share/mise/installs/python/3.12.10/bin/python
+#!.venv/bin/python
 
 import argparse
 import boto3
