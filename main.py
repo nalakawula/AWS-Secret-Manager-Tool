@@ -8,12 +8,41 @@ import subprocess
 import sys
 import logging
 from typing import Dict, List, Optional, Union
+from abc import ABC, abstractmethod
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('secret-manager')
 
-class SecretManager:
+class SecretStorageProvider(ABC):
+    """Abstract base class for secret storage providers."""
+    
+    @abstractmethod
+    def get_secret(self, secret_name: str) -> Dict:
+        """Retrieve a secret from the storage provider."""
+        pass
+    
+    @abstractmethod
+    def list_secrets(self) -> List[str]:
+        """List available secrets in the storage provider."""
+        pass
+    
+    @abstractmethod
+    def create_secret(self, secret_name: str, secret_value: Union[Dict, str], description: Optional[str] = None) -> bool:
+        """Create a new secret in the storage provider."""
+        pass
+    
+    @abstractmethod
+    def update_secret(self, secret_name: str, secret_value: Union[Dict, str]) -> bool:
+        """Update an existing secret in the storage provider."""
+        pass
+    
+    @abstractmethod
+    def delete_secret(self, secret_name: str, force_delete: bool = False) -> bool:
+        """Delete a secret from the storage provider."""
+        pass
+
+class SecretsManagerProvider(SecretStorageProvider):
     def __init__(self, region_name=None):
         """Initialize the Secret Manager with optional region configuration."""
         self.region_name = region_name or os.environ.get('AWS_REGION', 'us-east-1')
@@ -110,6 +139,155 @@ class SecretManager:
             logger.error(f"Error deleting secret {secret_name}: {str(e)}")
             return False
 
+class ParameterStoreProvider(SecretStorageProvider):
+    def __init__(self, region_name=None):
+        """Initialize the Parameter Store provider with optional region configuration."""
+        self.region_name = region_name or os.environ.get('AWS_REGION', 'us-east-1')
+        self.client = boto3.client('ssm', region_name=self.region_name)
+        self.path_prefix = '/secret/'  # Default path prefix for parameters
+    
+    def get_secret(self, secret_name: str) -> Dict:
+        """Retrieve a secret from AWS Parameter Store."""
+        try:
+            # Ensure the name has the correct prefix
+            param_name = self._ensure_path_prefix(secret_name)
+            
+            response = self.client.get_parameter(
+                Name=param_name,
+                WithDecryption=True
+            )
+            
+            if 'Parameter' in response and 'Value' in response['Parameter']:
+                try:
+                    # Try to parse as JSON
+                    return json.loads(response['Parameter']['Value'])
+                except json.JSONDecodeError:
+                    # If not JSON, return as singleton dict
+                    return {"value": response['Parameter']['Value']}
+            else:
+                logger.warning(f"No value found for parameter {param_name}")
+                return {}
+        except Exception as e:
+            logger.error(f"Error retrieving parameter {secret_name}: {str(e)}")
+            return {}
+    
+    def list_secrets(self) -> List[str]:
+        """List available secrets in AWS Parameter Store."""
+        try:
+            # Get parameters by path (recursive)
+            response = self.client.get_parameters_by_path(
+                Path=self.path_prefix,
+                Recursive=True
+            )
+            
+            # Strip the prefix to return just the name part
+            return [param['Name'].replace(self.path_prefix, '', 1) for param in response.get('Parameters', [])]
+        except Exception as e:
+            logger.error(f"Error listing parameters: {str(e)}")
+            return []
+    
+    def create_secret(self, secret_name: str, secret_value: Union[Dict, str], description: Optional[str] = None) -> bool:
+        """Create a new secret in AWS Parameter Store."""
+        try:
+            # Ensure the name has the correct prefix
+            param_name = self._ensure_path_prefix(secret_name)
+            
+            # Convert dict to JSON string if needed
+            if isinstance(secret_value, dict):
+                value = json.dumps(secret_value)
+            else:
+                value = secret_value
+                
+            kwargs = {
+                'Name': param_name,
+                'Value': value,
+                'Type': 'SecureString',
+                'Overwrite': False
+            }
+            
+            if description:
+                kwargs['Description'] = description
+                
+            self.client.put_parameter(**kwargs)
+            logger.info(f"Parameter {secret_name} created successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error creating parameter {secret_name}: {str(e)}")
+            return False
+    
+    def update_secret(self, secret_name: str, secret_value: Union[Dict, str]) -> bool:
+        """Update an existing secret in AWS Parameter Store."""
+        try:
+            # Ensure the name has the correct prefix
+            param_name = self._ensure_path_prefix(secret_name)
+            
+            # Convert dict to JSON string if needed
+            if isinstance(secret_value, dict):
+                value = json.dumps(secret_value)
+            else:
+                value = secret_value
+                
+            self.client.put_parameter(
+                Name=param_name,
+                Value=value,
+                Type='SecureString',
+                Overwrite=True
+            )
+            logger.info(f"Parameter {secret_name} updated successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error updating parameter {secret_name}: {str(e)}")
+            return False
+    
+    def delete_secret(self, secret_name: str, force_delete: bool = False) -> bool:
+        """Delete a secret from AWS Parameter Store."""
+        try:
+            # Ensure the name has the correct prefix
+            param_name = self._ensure_path_prefix(secret_name)
+            
+            self.client.delete_parameter(Name=param_name)
+            logger.info(f"Parameter {secret_name} deleted successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting parameter {secret_name}: {str(e)}")
+            return False
+    
+    def _ensure_path_prefix(self, name: str) -> str:
+        """Ensure the parameter name has the proper path prefix."""
+        if name.startswith(self.path_prefix):
+            return name
+        return f"{self.path_prefix}{name}"
+
+class SecretManager:
+    def __init__(self, provider_type='secretsmanager', region_name=None):
+        """Initialize the Secret Manager with selected provider."""
+        if provider_type == 'parameterstore':
+            self.provider = ParameterStoreProvider(region_name)
+            logger.info("Using Parameter Store provider (cost-effective option)")
+        else:  # Default to secrets manager
+            self.provider = SecretsManagerProvider(region_name)
+            logger.info("Using Secrets Manager provider")
+    
+    def get_secret(self, secret_name: str) -> Dict:
+        """Retrieve a secret from the configured provider."""
+        return self.provider.get_secret(secret_name)
+    
+    def list_secrets(self) -> List[str]:
+        """List available secrets in the configured provider."""
+        return self.provider.list_secrets()
+    
+    def create_secret(self, secret_name: str, secret_value: Union[Dict, str], description: Optional[str] = None) -> bool:
+        """Create a new secret in the configured provider."""
+        return self.provider.create_secret(secret_name, secret_value, description)
+    
+    def update_secret(self, secret_name: str, secret_value: Union[Dict, str]) -> bool:
+        """Update an existing secret in the configured provider."""
+        return self.provider.update_secret(secret_name, secret_value)
+    
+    def delete_secret(self, secret_name: str, force_delete: bool = False) -> bool:
+        """Delete a secret from the configured provider."""
+        return self.provider.delete_secret(secret_name, force_delete)
+
 def run_command(args: List[str], env_vars: Dict[str, str]) -> int:
     """Run a command with the provided environment variables."""
     merged_env = {**os.environ, **env_vars}
@@ -131,6 +309,12 @@ def parse_key_value_pair(pair: str) -> tuple:
 
 def main():
     parser = argparse.ArgumentParser(description="AWS Secret Management Tool")
+    
+    # Add global provider option
+    parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
+                        default='secretsmanager', 
+                        help="Secret storage provider (secretsmanager is default, parameterstore is more cost-effective)")
+    
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
     
     # Run command
@@ -138,21 +322,29 @@ def main():
     run_parser.add_argument("--secret", "-s", help="Secret name to load", required=True)
     run_parser.add_argument("--prefix", "-p", help="Environment variable prefix", default="")
     run_parser.add_argument("--region", "-r", help="AWS region", default=None)
+    run_parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
+                        help="Override the default secret storage provider")
     run_parser.add_argument("app", help="Application to run")
     run_parser.add_argument("app_args", nargs="*", help="Arguments for the application")
     
     # List command
     list_parser = subparsers.add_parser("list", help="List available secrets")
     list_parser.add_argument("--region", "-r", help="AWS region", default=None)
+    list_parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
+                        help="Override the default secret storage provider")
     
     # Get command
     get_parser = subparsers.add_parser("get", help="Get a secret's values")
     get_parser.add_argument("--region", "-r", help="AWS region", default=None)
+    get_parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
+                        help="Override the default secret storage provider")
     get_parser.add_argument("secret_name", help="Name of the secret to retrieve")
     
     # Create command
     create_parser = subparsers.add_parser("create", help="Create a new secret")
     create_parser.add_argument("--region", "-r", help="AWS region", default=None)
+    create_parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
+                        help="Override the default secret storage provider")
     create_parser.add_argument("--description", "-d", help="Secret description", default=None)
     create_parser.add_argument("--file", "-f", help="JSON file with secret values")
     create_parser.add_argument("secret_name", help="Name for the new secret")
@@ -161,6 +353,8 @@ def main():
     # Update command
     update_parser = subparsers.add_parser("update", help="Update an existing secret")
     update_parser.add_argument("--region", "-r", help="AWS region", default=None)
+    update_parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
+                        help="Override the default secret storage provider")
     update_parser.add_argument("--file", "-f", help="JSON file with secret values")
     update_parser.add_argument("secret_name", help="Name of the secret to update")
     update_parser.add_argument("key_values", nargs="*", help="Key-value pairs in format key=value")
@@ -168,6 +362,8 @@ def main():
     # Delete command
     delete_parser = subparsers.add_parser("delete", help="Delete a secret")
     delete_parser.add_argument("--region", "-r", help="AWS region", default=None)
+    delete_parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
+                        help="Override the default secret storage provider")
     delete_parser.add_argument("--force", action="store_true", help="Force delete without recovery window")
     delete_parser.add_argument("secret_name", help="Name of the secret to delete")
     
@@ -177,16 +373,19 @@ def main():
         parser.print_help()
         return 1
     
+    # Get the provider from command-specific argument if present, else from global argument
+    provider = getattr(args, 'provider', None) or parser.get_default('provider')
+    
     if args.command == "list":
-        secret_manager = SecretManager(region_name=args.region)
+        secret_manager = SecretManager(provider_type=provider, region_name=args.region)
         secrets = secret_manager.list_secrets()
-        print("Available secrets:")
+        print(f"Available secrets ({provider}):")
         for secret in secrets:
             print(f"- {secret}")
         return 0
     
     elif args.command == "get":
-        secret_manager = SecretManager(region_name=args.region)
+        secret_manager = SecretManager(provider_type=provider, region_name=args.region)
         secret_data = secret_manager.get_secret(args.secret_name)
         
         if not secret_data:
@@ -197,7 +396,7 @@ def main():
         return 0
     
     elif args.command == "create":
-        secret_manager = SecretManager(region_name=args.region)
+        secret_manager = SecretManager(provider_type=provider, region_name=args.region)
         
         # Check if secret already exists
         if args.secret_name in secret_manager.list_secrets():
@@ -233,7 +432,7 @@ def main():
         return 0 if success else 1
     
     elif args.command == "update":
-        secret_manager = SecretManager(region_name=args.region)
+        secret_manager = SecretManager(provider_type=provider, region_name=args.region)
         
         # Check if secret exists
         if args.secret_name not in secret_manager.list_secrets():
@@ -272,7 +471,7 @@ def main():
         return 0 if success else 1
     
     elif args.command == "delete":
-        secret_manager = SecretManager(region_name=args.region)
+        secret_manager = SecretManager(provider_type=provider, region_name=args.region)
         
         # Check if secret exists
         if args.secret_name not in secret_manager.list_secrets():
@@ -283,7 +482,7 @@ def main():
         return 0 if success else 1
     
     elif args.command == "run":
-        secret_manager = SecretManager(region_name=args.region)
+        secret_manager = SecretManager(provider_type=provider, region_name=args.region)
         secret_data = secret_manager.get_secret(args.secret)
         
         if not secret_data:
@@ -293,7 +492,7 @@ def main():
         # Prepare environment variables from secrets
         env_vars = {}
         for key, value in secret_data.items():
-            env_name = f"{args.prefix}{key}" if args.prefix else key
+            env_name = f"{args.prefix}{key.upper()}" if args.prefix else key.upper()
             env_vars[env_name] = str(value)
         
         # Log the secrets being injected (keys only for security)
