@@ -309,12 +309,6 @@ def parse_key_value_pair(pair: str) -> tuple:
 
 def main():
     parser = argparse.ArgumentParser(description="AWS Secret Management Tool")
-    
-    # Add global provider option
-    parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
-                        default='secretsmanager', 
-                        help="Secret storage provider (secretsmanager is default, parameterstore is more cost-effective)")
-    
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
     
     # Run command
@@ -323,7 +317,8 @@ def main():
     run_parser.add_argument("--prefix", "-p", help="Environment variable prefix", default="")
     run_parser.add_argument("--region", "-r", help="AWS region", default=None)
     run_parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
-                        help="Override the default secret storage provider")
+                        default='secretsmanager',
+                        help="Secret storage provider (secretsmanager is default, parameterstore is more cost-effective)")
     run_parser.add_argument("app", help="Application to run")
     run_parser.add_argument("app_args", nargs="*", help="Arguments for the application")
     
@@ -331,20 +326,23 @@ def main():
     list_parser = subparsers.add_parser("list", help="List available secrets")
     list_parser.add_argument("--region", "-r", help="AWS region", default=None)
     list_parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
-                        help="Override the default secret storage provider")
+                        default='secretsmanager',
+                        help="Secret storage provider (secretsmanager is default, parameterstore is more cost-effective)")
     
     # Get command
     get_parser = subparsers.add_parser("get", help="Get a secret's values")
     get_parser.add_argument("--region", "-r", help="AWS region", default=None)
     get_parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
-                        help="Override the default secret storage provider")
+                        default='secretsmanager',
+                        help="Secret storage provider (secretsmanager is default, parameterstore is more cost-effective)")
     get_parser.add_argument("secret_name", help="Name of the secret to retrieve")
     
     # Create command
     create_parser = subparsers.add_parser("create", help="Create a new secret")
     create_parser.add_argument("--region", "-r", help="AWS region", default=None)
     create_parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
-                        help="Override the default secret storage provider")
+                        default='secretsmanager',
+                        help="Secret storage provider (secretsmanager is default, parameterstore is more cost-effective)")
     create_parser.add_argument("--description", "-d", help="Secret description", default=None)
     create_parser.add_argument("--file", "-f", help="JSON file with secret values")
     create_parser.add_argument("secret_name", help="Name for the new secret")
@@ -354,7 +352,8 @@ def main():
     update_parser = subparsers.add_parser("update", help="Update an existing secret")
     update_parser.add_argument("--region", "-r", help="AWS region", default=None)
     update_parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
-                        help="Override the default secret storage provider")
+                        default='secretsmanager',
+                        help="Secret storage provider (secretsmanager is default, parameterstore is more cost-effective)")
     update_parser.add_argument("--file", "-f", help="JSON file with secret values")
     update_parser.add_argument("secret_name", help="Name of the secret to update")
     update_parser.add_argument("key_values", nargs="*", help="Key-value pairs in format key=value")
@@ -363,7 +362,8 @@ def main():
     delete_parser = subparsers.add_parser("delete", help="Delete a secret")
     delete_parser.add_argument("--region", "-r", help="AWS region", default=None)
     delete_parser.add_argument("--provider", "-P", choices=['secretsmanager', 'parameterstore'], 
-                        help="Override the default secret storage provider")
+                        default='secretsmanager',
+                        help="Secret storage provider (secretsmanager is default, parameterstore is more cost-effective)")
     delete_parser.add_argument("--force", action="store_true", help="Force delete without recovery window")
     delete_parser.add_argument("secret_name", help="Name of the secret to delete")
     
@@ -373,8 +373,8 @@ def main():
         parser.print_help()
         return 1
     
-    # Get the provider from command-specific argument if present, else from global argument
-    provider = getattr(args, 'provider', None) or parser.get_default('provider')
+    # Use the provider directly from args, since it's now defined in each subcommand
+    provider = args.provider if hasattr(args, 'provider') else 'secretsmanager'
     
     if args.command == "list":
         secret_manager = SecretManager(provider_type=provider, region_name=args.region)
